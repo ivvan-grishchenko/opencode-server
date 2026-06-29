@@ -164,15 +164,6 @@ function startProxy() {
   const expectedAuth = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
 
   const server = http.createServer((req, res) => {
-    const auth = req.headers.authorization;
-    if (!auth || auth !== expectedAuth) {
-      res.writeHead(401, {
-        'WWW-Authenticate': 'Basic realm="opencode"',
-        'Content-Type': 'text/plain',
-      });
-      return res.end('Unauthorized');
-    }
-
     const match = req.url.match(/^\/([^/]+)(\/.*)?$/);
     if (!match) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -188,6 +179,15 @@ function startProxy() {
         healthy: true,
         repos: Array.from(repoMap.keys()),
       }));
+    }
+
+    const auth = req.headers.authorization;
+    if (!auth || auth !== expectedAuth) {
+      res.writeHead(401, {
+        'WWW-Authenticate': 'Basic realm="opencode"',
+        'Content-Type': 'text/plain',
+      });
+      return res.end('Unauthorized');
     }
 
     const backend = repoMap.get(repoName);
