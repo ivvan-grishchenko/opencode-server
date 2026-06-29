@@ -34,6 +34,4 @@ ENV XDG_DATA_HOME=/data/local
 ENV XDG_CACHE_HOME=/data/cache
 ENV REPOS_DIR=/data/repos
 
-VOLUME ["/data"]
-
 CMD ["node", "start.js"]
