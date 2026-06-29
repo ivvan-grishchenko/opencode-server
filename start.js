@@ -108,11 +108,12 @@ function startBackend(repo, index) {
     repoMap.set(repo.name, {port, repoPath});
     console.log(`Starting OpenCode backend for "${repo.name}" on ${BACKEND_HOST}:${port}`);
 
+    const { OPENCODE_SERVER_PASSWORD: _, OPENCODE_SERVER_USERNAME: __, ...backendEnv } = process.env;
     const proc = spawn('opencode', ['serve', '--hostname', BACKEND_HOST, '--port', String(port)], {
         cwd: repoPath,
         stdio: 'inherit',
         env: {
-            ...process.env,
+            ...backendEnv,
             XDG_CONFIG_HOME,
             XDG_DATA_HOME,
             XDG_CACHE_HOME,
