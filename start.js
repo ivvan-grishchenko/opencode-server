@@ -23,8 +23,14 @@ const XDG_CACHE_HOME = process.env.XDG_CACHE_HOME || '/data/cache';
 
 const BACKEND_HOST = '127.0.0.1';
 const BACKEND_BASE_PORT = 5000;
-const BACKEND_READY_TIMEOUT_MS = 120_000;
-const BACKEND_READY_INTERVAL_MS = 1_000;
+const BACKEND_READY_TIMEOUT_MS = 60_000;
+const BACKEND_READY_INITIAL_DELAY_MS = 200;
+const BACKEND_READY_MAX_DELAY_MS = 1_000;
+const BACKEND_PROBE_TIMEOUT_MS = 2_000;
+// Probe path on the opencode HTTP server. `/app` is the liveness endpoint
+// available in opencode-ai 0.1.x. `/global/health` was added in a later
+// release; keep this in sync when bumping `opencode-ai`.
+const BACKEND_PROBE_PATH = '/app';
 
 // Ensure persistent directories exist
 for (const dir of [XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, REPOS_DIR]) {
@@ -32,7 +38,7 @@ for (const dir of [XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, REPOS_DIR]) {
 }
 
 // Write OpenCode config file
-const configDir = path.join(XDG_CONFIG_HOME, 'opencode');
+const configDir = path.join(XDG_CONFIG_HOME, '.opencode');
 fs.mkdirSync(configDir, {recursive: true});
 const configPath = path.join(configDir, 'opencode.json');
 
@@ -62,18 +68,22 @@ function exec(cmd, args, opts = {}) {
             if (code === 0) return resolve();
             reject(new Error(`${cmd} ${args.join(' ')} exited with code ${code}`));
         });
+        child.on('error', err => {
+            console.error(err);
+            reject(err);
+        })
     });
 }
 
 function ensureGhToken() {
     if (!process.env.GITHUB_TOKEN) throw new Error('GITHUB_TOKEN is required to clone private or public repos via gh CLI');
 
-    console.log('Using GITHUB_TOKEN from environment for gh CLI authentication.');
+    console.log('Configuring git to use GITHUB_TOKEN for github.com...');
 }
 
 async function syncRepo(repo) {
     const repoPath = path.join(REPOS_DIR, repo.name);
-    fs.mkdirSync(repoPath, {recursive: true});
+    fs.mkdirSync(REPOS_DIR, {recursive: true});
 
     const branch = repo.branch || 'main';
     const fullName = `${repo.owner}/${repo.repo}`;
@@ -81,24 +91,14 @@ async function syncRepo(repo) {
 
     if (exists) {
         console.log(`Updating existing repo: ${repo.name} (${fullName})`);
-        const syncMode = process.env.REPOS_SYNC_MODE || 'pull';
-
-        if (syncMode === 'reset') {
-            await exec('git', ['-C', repoPath, 'fetch', 'origin']);
-            await exec('git', ['-C', repoPath, 'reset', '--hard', `origin/${branch}`]);
-        } else if (syncMode === 'pull') {
-            await exec('git', ['-C', repoPath, 'pull', 'origin', branch]);
-        } else if (syncMode === 'none') {
-            console.log('Skipping update (REPOS_SYNC_MODE=none)');
-        } else {
-            throw new Error(`Unknown REPOS_SYNC_MODE: ${syncMode}`);
-        }
-    } else {
-        console.log(`Cloning repo: ${repo.name} (${fullName})`);
-        const cloneArgs = ['repo', 'clone', fullName, repoPath, '--', '--depth', '1'];
-        if (repo.branch) cloneArgs.push('--branch', repo.branch);
-        await exec('gh', cloneArgs);
+        await exec('gh', ['repo', 'sync', '--branch', branch], {cwd: repoPath});
+        return;
     }
+
+    console.log(`Cloning repo: ${repo.name} (${fullName}) into ${repoPath}`);
+    const cloneArgs = ['repo', 'clone', fullName, repoPath, '--', '--depth=1'];
+    if (repo.branch) cloneArgs.push('--branch', repo.branch);
+    await exec('gh', cloneArgs, {cwd: REPOS_DIR});
 }
 
 function startBackend(repo, index) {
@@ -108,16 +108,10 @@ function startBackend(repo, index) {
     repoMap.set(repo.name, {port, repoPath});
     console.log(`Starting OpenCode backend for "${repo.name}" on ${BACKEND_HOST}:${port}`);
 
-    const { OPENCODE_SERVER_PASSWORD: _, OPENCODE_SERVER_USERNAME: __, ...backendEnv } = process.env;
+    const {OPENCODE_SERVER_PASSWORD: _, OPENCODE_SERVER_USERNAME: __, ...backendEnv} = process.env;
     const proc = spawn('opencode', ['serve', '--hostname', BACKEND_HOST, '--port', String(port)], {
-        cwd: repoPath,
-        stdio: 'inherit',
-        env: {
-            ...backendEnv,
-            XDG_CONFIG_HOME,
-            XDG_DATA_HOME,
-            XDG_CACHE_HOME,
-            OPENCODE_DISABLE_AUTOUPDATE: 'true',
+        cwd: repoPath, stdio: 'inherit', env: {
+            ...backendEnv, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, OPENCODE_DISABLE_AUTOUPDATE: 'true',
         },
     });
 
@@ -125,26 +119,64 @@ function startBackend(repo, index) {
     return port;
 }
 
+function sleep(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+function jitteredDelay(base) {
+    const delta = base * 0.2;
+    return base - delta + Math.random() * 2 * delta;
+}
+
+const TRANSIENT_NETWORK_ERRORS = new Set([
+    'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'EPIPE', 'ETIMEDOUT',
+]);
+
 async function waitForBackend(port) {
-    const url = `http://${BACKEND_HOST}:${port}/global/health`;
+    const url = `http://${BACKEND_HOST}:${port}${BACKEND_PROBE_PATH}`;
     const start = Date.now();
+    let delay = BACKEND_READY_INITIAL_DELAY_MS;
 
     while (Date.now() - start < BACKEND_READY_TIMEOUT_MS) {
         try {
             const res = await new Promise((resolve, reject) => {
-                const req = http.get(url, res => resolve(res));
+                const req = http.get(url, resolve);
                 req.on('error', reject);
-                req.setTimeout(2_000, () => req.destroy(new Error('Timeout')));
+                req.setTimeout(BACKEND_PROBE_TIMEOUT_MS, () => req.destroy(new Error('probe-timeout')));
             });
 
             if (res.statusCode === 200) {
                 console.log(`Backend on port ${port} is healthy.`);
+                res.resume();
                 return;
             }
-        } catch {
-            // Not ready yet
+
+            // 404 on a static probe path means the path doesn't exist on
+            // this opencode version — a code bug, not a startup race.
+            // Fail fast so the bug surfaces immediately rather than after
+            // the time budget.
+            if (res.statusCode === 404) {
+                res.resume();
+                throw new Error(
+                    `Backend on port ${port} returned HTTP 404 for ${BACKEND_PROBE_PATH}. ` +
+                    `The probe path may not exist in this opencode version.`
+                );
+            }
+
+            console.log(`Backend on port ${port} returned HTTP ${res.statusCode}, retrying...`);
+            res.resume();
+        } catch (err) {
+            // Only swallow transient connection errors / probe timeouts —
+            // those mean "not ready yet". Anything else (incl. the 404 we
+            // throw above) is fatal.
+            const isTransient = err && (
+                err.message === 'probe-timeout' || TRANSIENT_NETWORK_ERRORS.has(err.code)
+            );
+            if (!isTransient) throw err;
         }
-        await new Promise(r => setTimeout(r, BACKEND_READY_INTERVAL_MS));
+
+        await sleep(jitteredDelay(delay));
+        delay = Math.min(delay * 2, BACKEND_READY_MAX_DELAY_MS);
     }
 
     throw new Error(`Backend on port ${port} did not become healthy within ${BACKEND_READY_TIMEOUT_MS}ms`);
@@ -156,9 +188,8 @@ function startProxy() {
 
     const username = process.env.OPENCODE_SERVER_USERNAME || 'opencode';
     const password = process.env.OPENCODE_SERVER_PASSWORD;
-    if (!password) {
-        throw new Error('OPENCODE_SERVER_PASSWORD is required for the proxy');
-    }
+    if (!password) throw new Error('OPENCODE_SERVER_PASSWORD is required for the proxy');
+
     const expectedAuth = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
 
     const server = http.createServer((req, res) => {
@@ -174,16 +205,14 @@ function startProxy() {
         if (repoName === 'health') {
             res.writeHead(200, {'Content-Type': 'application/json'});
             return res.end(JSON.stringify({
-                healthy: true,
-                repos: Array.from(repoMap.keys()),
+                healthy: true, repos: Array.from(repoMap.keys()),
             }));
         }
 
         const auth = req.headers.authorization;
         if (!auth || auth !== expectedAuth) {
             res.writeHead(401, {
-                'WWW-Authenticate': 'Basic realm="opencode"',
-                'Content-Type': 'text/plain',
+                'WWW-Authenticate': 'Basic realm="opencode"', 'Content-Type': 'text/plain',
             });
             return res.end('Unauthorized');
         }
@@ -229,20 +258,26 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 async function main() {
-    ensureGhToken();
+    try {
+        ensureGhToken();
 
-    for (const repo of repos) await syncRepo(repo);
+        console.log('Synchronizing configured repositories...');
+        await Promise.all(repos.map((repo) => syncRepo(repo)));
 
+        console.log('Bootstrapping backend services...');
+        // Start backends sequentially to avoid SQLite database-lock races when
+        // multiple opencode processes share the same XDG_DATA_HOME directory.
+        for (let i = 0; i < repos.length; i++) {
+            const port = startBackend(repos[i], i);
+            await waitForBackend(port);
+        }
+        console.log('All individual backends healthy.');
 
-    for (let i = 0; i < repos.length; i++) startBackend(repos[i], i);
-
-
-    for (let i = 0; i < repos.length; i++) {
-        const port = BACKEND_BASE_PORT + i;
-        await waitForBackend(port);
+        startProxy();
+    } catch (error) {
+        console.error('Critical orchestrator failure during bootstrap:', error.message);
+        shutdown('SIGTERM');
     }
-
-    startProxy();
 }
 
 main().catch(err => {

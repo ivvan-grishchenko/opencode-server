@@ -55,7 +55,6 @@ Set these in the Railway service dashboard. Secrets (`GITHUB_TOKEN`, `OPENCODE_G
 | `OPENCODE_SERVER_PASSWORD` | Yes | Password for HTTP Basic Auth |
 | `OPENCODE_SERVER_USERNAME` | No | Username for HTTP Basic Auth (default: `opencode`) |
 | `REPOS_JSON` | Yes | JSON array of repos to clone (see below) |
-| `REPOS_SYNC_MODE` | No | `pull` (default), `reset`, or `none` |
 | `XDG_CONFIG_HOME` | Yes | `/data/config` |
 | `XDG_DATA_HOME` | Yes | `/data/local` |
 | `XDG_CACHE_HOME` | Yes | `/data/cache` |
@@ -73,16 +72,6 @@ Set these in the Railway service dashboard. Secrets (`GITHUB_TOKEN`, `OPENCODE_G
 - `name`: the URL path segment for this repo (`/<name>/...`)
 - `owner` / `repo`: GitHub `owner/repo` identifier
 - `branch`: branch to clone (default: `main`)
-
-### `REPOS_SYNC_MODE`
-
-| Mode | Behavior on redeploy |
-|---|---|
-| `pull` | `git pull origin <branch>` |
-| `reset` | `git fetch origin && git reset --hard origin/<branch>` |
-| `none` | Skip updates |
-
-Use `reset` if you want the server to discard local changes made by the agent and start fresh from the remote branch.
 
 ## Railway Deployment
 

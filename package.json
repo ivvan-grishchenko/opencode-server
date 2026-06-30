@@ -5,7 +5,7 @@
   "description": "OpenCode server deployment on Railway with per-repo backends and a path-based proxy",
   "dependencies": {
     "http-proxy": "^1.18.1",
-    "opencode-ai": "^0.1.48"
+    "opencode-ai": "latest"
   },
   "scripts": {
     "start": "node start.js"
