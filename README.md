@@ -1,11 +1,11 @@
 # OpenCode Server on Railway
 
-Deploy [OpenCode](https://opencode.ai) as a headless HTTP server on [Railway](https://railway.app), with support for **multiple GitHub repositories** and a **Cloudflare Worker** client.
+Deploy [OpenCode](https://opencode.ai) as a headless HTTP server on [Railway](https://railway.app), with support for **multiple GitHub repositories**.
 
 ## Architecture
 
 ```
-Cloudflare Worker
+HTTP client
         |
         | HTTPS + Basic Auth
         v
@@ -126,7 +126,7 @@ HTTP Basic Auth is enforced on every route **except** `/health`:
 | `/reference`              | Basic Auth | Scalar API reference UI                                              |
 | `/reference/openapi.json` | Basic Auth | Raw OpenAPI 3.1 spec                                                 |
 
-The `Authorization` header must be `Basic <base64(username:password)>`. The Cloudflare Worker example below shows the correct format.
+The `Authorization` header must be `Basic <base64(username:password)>`.
 
 ## API documentation
 
@@ -137,63 +137,6 @@ https://your-domain.up.railway.app/reference
 ```
 
 The underlying OpenAPI 3.1 spec is available at `/reference/openapi.json` and `/reference/openapi.yaml` (also behind Basic Auth). The document is hand-authored (static) and describes the unauthenticated `/health` probe and the authenticated `/{repo}/*` proxy convention; the dynamic per-repo pass-through routes are intentionally not enumerated (they forward to each `opencode serve` backend's own HTTP API).
-
-## Cloudflare Worker Client
-
-The Worker talks to the proxy with Basic Auth. Each repo is addressed by path prefix.
-
-```typescript
-export class OpencodeClient {
-  constructor(
-    private baseUrl: string,
-    private username: string,
-    private password: string,
-  ) {}
-
-  private auth() {
-    return 'Basic ' + btoa(`${this.username}:${this.password}`);
-  }
-
-  private async call(path: string, opts: RequestInit = {}) {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      ...opts,
-      headers: {
-        Authorization: this.auth(),
-        'Content-Type': 'application/json',
-        ...(opts.headers || {}),
-      },
-    });
-    if (!res.ok) throw new Error(`${res.status}: ${await res.text()}`);
-    return res.json();
-  }
-
-  health() {
-    return this.call('/global/health');
-  }
-  currentProject() {
-    return this.call('/project/current');
-  }
-  createSession(title: string) {
-    return this.call('/session', { method: 'POST', body: JSON.stringify({ title }) });
-  }
-  sendPrompt(sessionId: string, text: string) {
-    return this.call(`/session/${sessionId}/message`, {
-      method: 'POST',
-      body: JSON.stringify({ parts: [{ type: 'text', text }] }),
-    });
-  }
-}
-
-// Usage
-const client = new OpencodeClient(
-  'https://your-domain.up.railway.app/repo-a',
-  'opencode',
-  env.OPENCODE_SERVER_PASSWORD,
-);
-
-const session = await client.createSession('Review auth flow');
-const result = await client.sendPrompt(session.id, 'Explain src/auth.ts');
-```
 
 ## Local Development Notes
 
@@ -241,9 +184,9 @@ docker build -t opencode-server .
 - **Add a repo**: update `REPOS_JSON`, push, redeploy
 - **Update provider/model**: edit `opencode.json` or override with `OPENCODE_CONFIG_CONTENT`
 
-## Architecture (rewritten)
+## Project structure
 
-The server is now TypeScript + [Fastify](https://fastify.dev), split into single-responsibility modules:
+The server is TypeScript + [Fastify](https://fastify.dev), split into single-responsibility modules:
 
 ```
 src/
