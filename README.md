@@ -37,7 +37,7 @@ https://your-domain.up.railway.app/repo-b/session
 | `src/repos/`                       | Repo clone/sync via `simple-git` (auth via `http.extraheader`, not persisted)          |
 | `src/processes/`                   | `opencode serve` spawning with supervised restart (10-attempt ceiling)                 |
 | `src/health/`                      | HTTP probe + jittered exponential-backoff health checker                               |
-| `src/server/`                      | Fastify app, `@fastify/http-proxy` per repo, `@fastify/basic-auth`                     |
+| `src/server/`                      | Fastify app, `@fastify/http-proxy` per repo, `@fastify/basic-auth`, Scalar docs        |
 | `opencode.json`                    | Default OpenCode config (OpenCode Go provider, permissions, etc.)                      |
 | `railway.toml`                     | Railway config-as-code (builder, healthcheck, restart policy)                          |
 | `package.json`                     | Runtime deps + lint/format scripts                                                     |
@@ -56,17 +56,17 @@ https://your-domain.up.railway.app/repo-b/session
 
 Set these in the Railway service dashboard. Secrets (`GITHUB_TOKEN`, `OPENCODE_GO_API_KEY`, `OPENCODE_SERVER_PASSWORD`) should be encrypted.
 
-| Variable                   | Required | Description                                           |
-| -------------------------- | -------- | ----------------------------------------------------- |
-| `GITHUB_TOKEN`             | Yes      | GitHub PAT used by `gh` to clone private/public repos |
-| `OPENCODE_GO_API_KEY`      | Yes      | OpenCode Go provider API key                          |
-| `OPENCODE_SERVER_PASSWORD` | Yes      | Password for HTTP Basic Auth                          |
-| `OPENCODE_SERVER_USERNAME` | No       | Username for HTTP Basic Auth (default: `opencode`)    |
-| `REPOS_JSON`               | Yes      | JSON array of repos to clone (see below)              |
-| `XDG_CONFIG_HOME`          | Yes      | `/data/config`                                        |
-| `XDG_DATA_HOME`            | Yes      | `/data/local`                                         |
-| `XDG_CACHE_HOME`           | Yes      | `/data/cache`                                         |
-| `REPOS_DIR`                | Yes      | `/data/repos` (set in Dockerfile)                     |
+| Variable                   | Required | Description                                                   |
+| -------------------------- | -------- | ------------------------------------------------------------- |
+| `GITHUB_TOKEN`             | Yes      | GitHub PAT used by `simple-git` to clone private/public repos |
+| `OPENCODE_GO_API_KEY`      | Yes      | OpenCode Go provider API key                                  |
+| `OPENCODE_SERVER_PASSWORD` | Yes      | Password for HTTP Basic Auth                                  |
+| `OPENCODE_SERVER_USERNAME` | No       | Username for HTTP Basic Auth (default: `opencode`)            |
+| `REPOS_JSON`               | Yes      | JSON array of repos to clone (see below)                      |
+| `XDG_CONFIG_HOME`          | Yes      | `/data/config`                                                |
+| `XDG_DATA_HOME`            | Yes      | `/data/local`                                                 |
+| `XDG_CACHE_HOME`           | Yes      | `/data/cache`                                                 |
+| `REPOS_DIR`                | Yes      | `/data/repos` (set in Dockerfile)                             |
 
 ### `REPOS_JSON` format
 
@@ -105,10 +105,28 @@ Set these in the Railway service dashboard. Secrets (`GITHUB_TOKEN`, `OPENCODE_G
    - Service → **Settings** → **Networking** → **Generate Domain**
 
 6. **Verify**
+
    ```bash
-   curl -u opencode:YOUR_PASSWORD https://your-domain.up.railway.app/health
+   # Health probe is unauthenticated (Railway/Docker healthcheck)
+   curl -s https://your-domain.up.railway.app/health
+
+   # Proxy routes and docs require Basic Auth
    curl -u opencode:YOUR_PASSWORD https://your-domain.up.railway.app/repo-a/project/current
+   curl -u opencode:YOUR_PASSWORD https://your-domain.up.railway.app/reference
    ```
+
+## Authentication
+
+HTTP Basic Auth is enforced on every route **except** `/health`:
+
+| Route                     | Auth       | Notes                                                                |
+| ------------------------- | ---------- | -------------------------------------------------------------------- |
+| `/health`                 | None       | Required by Railway/Docker healthchecks                              |
+| `/<repo>/*`               | Basic Auth | Credentials: `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` |
+| `/reference`              | Basic Auth | Scalar API reference UI                                              |
+| `/reference/openapi.json` | Basic Auth | Raw OpenAPI 3.1 spec                                                 |
+
+The `Authorization` header must be `Basic <base64(username:password)>`. The Cloudflare Worker example below shows the correct format.
 
 ## API documentation
 
@@ -118,7 +136,7 @@ An interactive Scalar API reference is served at `/reference` (behind Basic Auth
 https://your-domain.up.railway.app/reference
 ```
 
-The underlying OpenAPI 3.1 spec is available at `/reference/openapi.json` and `/reference/openapi.yaml`. The document is hand-authored (static) and describes the unauthenticated `/health` probe and the authenticated `/{repo}/*` proxy convention; the dynamic per-repo pass-through routes are intentionally not enumerated (they forward to each `opencode serve` backend's own HTTP API).
+The underlying OpenAPI 3.1 spec is available at `/reference/openapi.json` and `/reference/openapi.yaml` (also behind Basic Auth). The document is hand-authored (static) and describes the unauthenticated `/health` probe and the authenticated `/{repo}/*` proxy convention; the dynamic per-repo pass-through routes are intentionally not enumerated (they forward to each `opencode serve` backend's own HTTP API).
 
 ## Cloudflare Worker Client
 
@@ -207,14 +225,15 @@ docker build -t opencode-server .
 
 ## Troubleshooting
 
-| Symptom                                     | Likely cause                                                               |
-| ------------------------------------------- | -------------------------------------------------------------------------- |
-| `401 Unauthorized`                          | Wrong `OPENCODE_SERVER_PASSWORD` or missing `Authorization` header         |
-| `404 Repo "x" not found`                    | `name` in `REPOS_JSON` does not match the URL path                         |
-| `502 Backend unavailable`                   | OpenCode backend is still starting; retry after a few seconds              |
-| `gh auth login` fails                       | `GITHUB_TOKEN` is missing or lacks `repo` scope                            |
-| Deploy fails healthcheck                    | `/health` must return 200. Check deploy logs for startup errors.           |
-| Health check passes but repo endpoints fail | Backends may have failed to start. Check logs for `opencode serve` errors. |
+| Symptom                                     | Likely cause                                                                   |
+| ------------------------------------------- | ------------------------------------------------------------------------------ |
+| `401 Unauthorized` on `/<repo>/*`           | Missing/malformed `Authorization: Basic ...` header (only `/health` is public) |
+| `401 Unauthorized` on `/reference`          | Docs endpoint also requires Basic Auth                                         |
+| `404 Repo "x" not found`                    | `name` in `REPOS_JSON` does not match the URL path                             |
+| `502 Backend unavailable`                   | OpenCode backend is still starting; retry after a few seconds                  |
+| Repo clone/update fails                     | `GITHUB_TOKEN` is missing or lacks `repo` scope                                |
+| Deploy fails healthcheck                    | `/health` must return 200. Check deploy logs for startup errors.               |
+| Health check passes but repo endpoints fail | Backends may have failed to start. Check logs for `opencode serve` errors.     |
 
 ## Updating
 
