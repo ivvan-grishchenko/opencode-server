@@ -3,12 +3,35 @@
   "version": "1.0.0",
   "private": true,
   "description": "OpenCode server deployment on Railway with per-repo backends and a path-based proxy",
-  "dependencies": {
-    "http-proxy": "^1.18.1",
-    "opencode-ai": "latest"
-  },
+  "type": "module",
+  "main": "dist/index.js",
   "scripts": {
-    "start": "node start.js"
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check"
+  },
+  "dependencies": {
+    "@fastify/basic-auth": "^6.0.0",
+    "@fastify/http-proxy": "^10.0.0",
+    "@scalar/fastify-api-reference": "^1.62.1",
+    "fastify": "^5.0.0",
+    "opencode-ai": "latest",
+    "pino": "^9.0.0",
+    "simple-git": "^3.36.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "oxfmt": "^0.57.0",
+    "oxlint": "^1.72.0",
+    "pino-pretty": "^11.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
   },
   "engines": {
     "node": ">=22.0.0"

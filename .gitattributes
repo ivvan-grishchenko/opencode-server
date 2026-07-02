@@ -1,0 +1,31 @@
+# Normalize line endings to LF (oxfmt emits LF; enforced consistently)
+* text=auto eol=lf
+
+# Explicit text attributes for source/config files
+*.ts   text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.cjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.sh   text eol=lf
+Dockerfile    text eol=lf
+.gitignore    text eol=lf
+.gitattributes text eol=lf
+
+# Generated / build artifacts: hide from diffs and GitHub language stats
+dist/**             linguist-generated
+package-lock.json   linguist-generated
+
+# Binary assets
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.svg  binary
+*.woff binary
+*.woff2 binary
