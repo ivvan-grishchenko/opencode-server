@@ -1,0 +1,5 @@
+allowBuilds:
+  '@suites/di.nestjs': true
+  '@suites/doubles.vitest': true
+  '@swc/core': true
+  opencode-ai: true
