@@ -1,6 +1,6 @@
 {
   "name": "opencode-server",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "description": "OpenCode server with per-repo backends and a path-based proxy (NestJS)",
   "private": true,
   "type": "module",
